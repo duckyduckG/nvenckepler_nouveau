@@ -9,6 +9,8 @@ project(${_name} VERSION ${_version})
 option(ENABLE_FRONTEND_API "Use obs-frontend-api for UI functionality" OFF)
 option(ENABLE_QT "Use Qt functionality" OFF)
 option(ENABLE_HEVC "Enable HEVC encoders" ON)
+option(ENABLE_NOUVEAU_VAAPI "Build open-source Kepler Nouveau MSENC VA-API backend" ON)
+set(KEPLER_LIBVA_DRIVERS_PATH "" CACHE STRING "Optional default LIBVA_DRIVERS_PATH override for local Mesa testing")
 
 include(compilerconfig)
 include(defaults)
@@ -43,43 +45,55 @@ set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_nam
 
 # AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 
-if(NOT TARGET OBS::opts-parser)
-  add_subdirectory("${CMAKE_SOURCE_DIR}/shared/opts-parser" "${CMAKE_BINARY_DIR}/shared/opts-parser")
+if(ENABLE_NOUVEAU_VAAPI)
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET libavcodec libavutil libva libva-drm egl gl)
+
+  target_sources(${CMAKE_PROJECT_NAME} PRIVATE src/nvenc-vaapi-kepler.c src/obs-nvenc.c src/obs-nvenc.h)
+  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE OBS::libobs PkgConfig::FFMPEG)
+  target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE ENABLE_NOUVEAU_VAAPI)
+  if(KEPLER_LIBVA_DRIVERS_PATH)
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE "DEFAULT_KEPLER_LIBVA_DRIVERS_PATH=\"${KEPLER_LIBVA_DRIVERS_PATH}\"")
+  endif()
+else()
+  if(NOT TARGET OBS::opts-parser)
+    add_subdirectory("${CMAKE_SOURCE_DIR}/shared/opts-parser" "${CMAKE_BINARY_DIR}/shared/opts-parser")
+  endif()
+
+  if(OS_LINUX AND NOT TARGET OBS::glad)
+    add_subdirectory("${CMAKE_SOURCE_DIR}/deps/glad" "${CMAKE_BINARY_DIR}/deps/glad")
+  endif()
+
+  # Add common module directories to default search path
+  list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/common" "${CMAKE_CURRENT_SOURCE_DIR}/cmake/finders")
+
+  find_package(FFnvcodec 11 REQUIRED)
+
+  add_subdirectory(src/tester)
+
+  target_sources(
+    ${CMAKE_PROJECT_NAME}
+    PRIVATE
+      $<$<PLATFORM_ID:Linux>:src/nvenc-opengl.c>
+      $<$<PLATFORM_ID:Windows>:src/nvenc-d3d11.c>
+      src/cuda-helpers.c
+      src/cuda-helpers.h
+      src/nvenc-compat.c
+      src/nvenc-cuda.c
+      src/nvenc-helpers.c
+      src/nvenc-helpers.h
+      src/nvenc-internal.h
+      src/nvenc-opts-parser.c
+      src/nvenc-properties.c
+      src/nvenc.c
+      src/obs-nvenc.c
+      src/obs-nvenc.h
+  )
+
+  target_link_libraries(
+    ${CMAKE_PROJECT_NAME}
+    PRIVATE OBS::libobs OBS::opts-parser FFnvcodec::FFnvcodec $<$<PLATFORM_ID:Linux>:OBS::glad>
+  )
+
+  target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE $<$<BOOL:${ENABLE_NVENC_FFMPEG_IDS}>:REGISTER_FFMPEG_IDS>)
 endif()
-
-if(OS_LINUX AND NOT TARGET OBS::glad)
-  add_subdirectory("${CMAKE_SOURCE_DIR}/deps/glad" "${CMAKE_BINARY_DIR}/deps/glad")
-endif()
-
-# Add common module directories to default search path
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/common" "${CMAKE_CURRENT_SOURCE_DIR}/cmake/finders")
-
-find_package(FFnvcodec 11 REQUIRED)
-
-add_subdirectory(src/tester)
-
-target_sources(
-  ${CMAKE_PROJECT_NAME}
-  PRIVATE
-    $<$<PLATFORM_ID:Linux>:src/nvenc-opengl.c>
-    $<$<PLATFORM_ID:Windows>:src/nvenc-d3d11.c>
-    src/cuda-helpers.c
-    src/cuda-helpers.h
-    src/nvenc-compat.c
-    src/nvenc-cuda.c
-    src/nvenc-helpers.c
-    src/nvenc-helpers.h
-    src/nvenc-internal.h
-    src/nvenc-opts-parser.c
-    src/nvenc-properties.c
-    src/nvenc.c
-    src/obs-nvenc.c
-    src/obs-nvenc.h
-)
-
-target_link_libraries(
-  ${CMAKE_PROJECT_NAME}
-  PRIVATE OBS::libobs OBS::opts-parser FFnvcodec::FFnvcodec $<$<PLATFORM_ID:Linux>:OBS::glad>
-)
-
-target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE $<$<BOOL:${ENABLE_NVENC_FFMPEG_IDS}>:REGISTER_FFMPEG_IDS>)
